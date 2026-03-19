@@ -7,6 +7,10 @@ import numpy as np
 from loguru import logger
 
 from .service_context import ServiceContext
+from .memory.context_manager import ContextManager
+from .memory.long_term_memory import LongTermMemory
+from .memory.affection import AffectionTracker
+from .expression_commands import is_expression_command, handle_expression_command
 from .chat_group import (
     ChatGroupManager,
     handle_group_operation,
@@ -22,6 +26,7 @@ from .chat_history_manager import (
     get_history_list,
 )
 from .config_manager.utils import scan_config_alts_directory, scan_bg_directory
+from prompts import prompt_loader
 from .conversations.conversation_handler import (
     handle_conversation_trigger,
     handle_group_interrupt,
@@ -199,7 +204,63 @@ class WebSocketHandler:
             send_text=send_text,
             client_uid=client_uid,
         )
+
+        conf_uid = session_service_context.character_config.conf_uid
+        memory_cfg = getattr(
+            session_service_context.character_config, "memory_config", None
+        )
+        max_recent = 30
+        summarize_batch = 20
+        auto_summarize = True
+        if memory_cfg and isinstance(memory_cfg, dict):
+            max_recent = memory_cfg.get("max_recent_messages", 30)
+            summarize_batch = memory_cfg.get("summarize_batch_size", 20)
+            auto_summarize = memory_cfg.get("auto_summarize", True)
+
+        session_service_context.context_manager = ContextManager(
+            max_recent_messages=max_recent,
+            summarize_batch_size=summarize_batch,
+            auto_summarize=auto_summarize,
+        )
+        session_service_context.long_term_memory = LongTermMemory(conf_uid)
+        session_service_context.affection = AffectionTracker(conf_uid)
+
+        if hasattr(session_service_context.agent_engine, "set_context_manager"):
+            session_service_context.agent_engine.set_context_manager(
+                session_service_context.context_manager
+            )
+
+        self._auto_restore_history(session_service_context)
+
+        try:
+            new_prompt = await session_service_context.construct_system_prompt(
+                session_service_context.character_config.persona_prompt
+            )
+            if hasattr(session_service_context.agent_engine, "set_system"):
+                session_service_context.agent_engine.set_system(new_prompt)
+                session_service_context.system_prompt = new_prompt
+                logger.info("System prompt reconstructed with memory/affection context")
+        except Exception as e:
+            logger.warning(f"Failed to reconstruct system prompt (non-fatal): {e}")
+
         return session_service_context
+
+    def _auto_restore_history(self, ctx: ServiceContext):
+        """Load the most recent chat history on connect."""
+        try:
+            conf_uid = ctx.character_config.conf_uid
+            histories = get_history_list(conf_uid)
+            if histories:
+                most_recent = histories[0]
+                history_uid = most_recent.get("uid") or most_recent.get("history_uid")
+                if history_uid:
+                    ctx.history_uid = history_uid
+                    ctx.agent_engine.set_memory_from_history(conf_uid, history_uid)
+                    logger.info(
+                        f"Auto-restored history {history_uid} for {conf_uid}"
+                    )
+        except Exception as e:
+            logger.warning(f"Auto-restore history failed (non-fatal): {e}")
 
     async def handle_websocket_communication(
         self, websocket: WebSocket, client_uid: str
@@ -278,7 +339,12 @@ class WebSocketHandler:
         )
 
     async def handle_disconnect(self, client_uid: str) -> None:
-        """Handle client disconnection"""
+        """Handle client disconnection with memory summarization and affection eval."""
+        context = self.client_contexts.get(client_uid)
+
+        if context:
+            await self._run_disconnect_memory_tasks(context)
+
         group = self.chat_group_manager.get_client_group(client_uid)
         if group:
             await handle_group_interrupt(
@@ -314,6 +380,51 @@ class WebSocketHandler:
 
         logger.info(f"Client {client_uid} disconnected")
         message_handler.cleanup_client(client_uid)
+
+    async def _run_disconnect_memory_tasks(self, ctx: ServiceContext) -> None:
+        """Run summarization and affection evaluation on disconnect."""
+        try:
+            agent = ctx.agent_engine
+            if not hasattr(agent, "get_memory") or not hasattr(agent, "get_llm"):
+                return
+
+            memory = agent.get_memory()
+            llm = agent.get_llm()
+            if not memory or len(memory) < 4:
+                return
+
+            summary_prompt = ""
+            eval_prompt = ""
+            try:
+                summary_prompt = prompt_loader.load_util("memory_summary_prompt")
+            except Exception:
+                logger.warning("memory_summary_prompt.txt not found, skipping summarization")
+            try:
+                eval_prompt = prompt_loader.load_util("affection_eval_prompt")
+            except Exception:
+                logger.warning("affection_eval_prompt.txt not found, skipping affection eval")
+
+            if summary_prompt and ctx.long_term_memory and ctx.context_manager:
+                facts = await ctx.context_manager.summarize_messages(
+                    memory, llm, summary_prompt
+                )
+                if facts:
+                    ctx.long_term_memory.add_facts(facts)
+
+            if eval_prompt and ctx.affection:
+                delta, reason = await ctx.affection.evaluate_session(
+                    memory, llm, eval_prompt
+                )
+                ctx.affection.record_session()
+                if delta != 0:
+                    ctx.affection.apply_delta(delta, reason)
+                logger.info(
+                    f"Session affection eval: delta={delta}, reason={reason}, "
+                    f"new_level={ctx.affection.level}"
+                )
+
+        except Exception as e:
+            logger.error(f"Disconnect memory tasks failed (non-fatal): {e}")
 
     async def _cleanup_failed_connection(self, client_uid: str) -> None:
         """Clean up failed connection data"""
@@ -514,6 +625,12 @@ class WebSocketHandler:
         self, websocket: WebSocket, client_uid: str, data: WSMessage
     ) -> None:
         """Handle triggers that start a conversation"""
+        if data.get("type") == "text-input":
+            text = data.get("text", "")
+            if is_expression_command(text):
+                ctx = self.client_contexts.get(client_uid)
+                await handle_expression_command(text, websocket.send_text, service_context=ctx)
+                return
         await handle_conversation_trigger(
             msg_type=data.get("type", ""),
             data=data,

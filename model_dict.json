@@ -26,5 +26,39 @@
                 "": 1
             }
         }
+    },
+    {
+        "name": "witchZ3",
+        "description": "WitchZ3 Live2D model",
+        "url": "/live2d-models/witchZ3/witchZ3/witchZ3.model3.json",
+        "kScale": 0.5,
+        "initialXshift": 0,
+        "initialYshift": 0,
+        "kXOffset": 1150,
+        "idleMotionGroupName": "Idle",
+        "emotionMap": {
+            "neutral": 0,
+            "joy": 1,
+            "love": 1,
+            "disgust": 3,
+            "blush": 4,
+            "smirk": 4,
+            "sadness": 6,
+            "cry": 6,
+            "surprise": 7,
+            "exclaim": 7,
+            "anger": 8,
+            "sweat": 9,
+            "fear": 9,
+            "question": 10,
+            "scratch": 13,
+            "wave": 15,
+            "cat": 16,
+            "hug": 17,
+            "hearts": 18,
+            "game": 19,
+            "write": 20,
+            "tongue": 21
+        }
     }
 ]

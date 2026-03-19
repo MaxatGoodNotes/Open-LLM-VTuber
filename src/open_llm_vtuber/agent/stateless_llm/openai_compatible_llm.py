@@ -45,6 +45,7 @@ class AsyncLLM(StatelessLLMInterface):
         self.base_url = base_url
         self.model = model
         self.temperature = temperature
+        self.extra_body = {}
         self.client = AsyncOpenAI(
             base_url=base_url,
             organization=organization_id,
@@ -105,6 +106,7 @@ class AsyncLLM(StatelessLLMInterface):
                 stream=True,
                 temperature=self.temperature,
                 tools=available_tools,
+                extra_body=self.extra_body if self.extra_body else None,
             )
             logger.debug(
                 f"Tool Support: {self.support_tools}, Available tools: {available_tools}"

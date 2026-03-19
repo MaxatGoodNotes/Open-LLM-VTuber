@@ -22,12 +22,13 @@ class TTSEngine(TTSInterface):
 
     def __init__(
         self,
-        model="kokoro",  # Default model based on user example
-        voice="af_sky+af_bella",  # Default voice based on user example
-        api_key="not-needed",  # Default for local/compatible servers that don't require auth
-        base_url="http://localhost:8880/v1",  # Default to the specified endpoint
-        file_extension: str = "mp3",  # Configurable file extension
-        **kwargs,  # Allow passing additional args to OpenAI client
+        model="kokoro",
+        voice="af_sky+af_bella",
+        api_key="not-needed",
+        base_url="http://localhost:8880/v1",
+        file_extension: str = "mp3",
+        speed: float = 1.0,
+        **kwargs,
     ):
         """
         Initializes the OpenAI TTS engine.
@@ -40,7 +41,8 @@ class TTSEngine(TTSInterface):
         """
         self.model = model
         self.voice = voice
-        self.file_extension = file_extension.lower()  # Use configured extension
+        self.speed = speed
+        self.file_extension = file_extension.lower()
         if self.file_extension not in ["mp3", "wav"]:
             logger.warning(
                 f"Unsupported file extension '{self.file_extension}' configured for OpenAI TTS. Defaulting to 'mp3'."
@@ -62,7 +64,7 @@ class TTSEngine(TTSInterface):
             logger.critical(f"Failed to initialize OpenAI client: {e}")
             self.client = None  # Ensure client is None if init fails
 
-    def generate_audio(self, text, file_name_no_ext=None, speed=1.0):
+    def generate_audio(self, text, file_name_no_ext=None, speed=None):
         """
         Generate speech audio file using OpenAI TTS.
 
@@ -89,11 +91,11 @@ class TTSEngine(TTSInterface):
             # Use with_streaming_response for potentially better handling of large audio files or network issues
             with (
                 self.client.audio.speech.with_streaming_response.create(
-                    model=self.model,  # Model name expected by the compatible server (e.g., "kokoro")
-                    voice=self.voice,  # Voice name(s) expected by the compatible server (e.g., "af_sky+af_bella")
+                    model=self.model,
+                    voice=self.voice,
                     input=text,
-                    response_format=self.file_extension,  # Use configured extension
-                    speed=speed,
+                    response_format=self.file_extension,
+                    speed=speed if speed is not None else self.speed,
                 ) as response
             ):
                 # Stream the audio content to the file

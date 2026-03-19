@@ -1,6 +1,7 @@
 from typing import Union, List, Dict, Any, Optional
 import asyncio
 import json
+import re
 from loguru import logger
 import numpy as np
 
@@ -13,12 +14,12 @@ from .conversation_utils import (
     cleanup_conversation,
     EMOJI_LIST,
 )
+from .toggle_tag_parser import parse_and_send_toggle_tags
 from .types import WebSocketSend
 from .tts_manager import TTSTaskManager
 from ..chat_history_manager import store_message
 from ..service_context import ServiceContext
 
-# Import necessary types from agent outputs
 from ..agent.output_types import SentenceOutput, AudioOutput
 
 
@@ -148,7 +149,12 @@ async def process_single_conversation(
             client_uid=client_uid,
         )
 
-        if context.history_uid and full_response:  # Check full_response before storing
+        if full_response and context.affection:
+            full_response = await parse_and_send_toggle_tags(
+                full_response, websocket_send, context.affection
+            )
+
+        if context.history_uid and full_response:
             store_message(
                 conf_uid=context.character_config.conf_uid,
                 history_uid=context.history_uid,

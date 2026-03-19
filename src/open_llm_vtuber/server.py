@@ -37,6 +37,9 @@ class CORSStaticFiles(StarletteStaticFiles):
         if path.endswith(".js"):
             response.headers["Content-Type"] = "application/javascript"
 
+        if path.endswith((".model3.json", ".exp3.json", ".json")):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+
         return response
 
 

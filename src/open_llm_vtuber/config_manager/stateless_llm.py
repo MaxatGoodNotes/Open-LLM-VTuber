@@ -96,6 +96,7 @@ class OllamaConfig(OpenAICompatibleConfig):
     llm_api_key: str = Field("default_api_key", alias="llm_api_key")
     keep_alive: float = Field(-1, alias="keep_alive")
     unload_at_exit: bool = Field(True, alias="unload_at_exit")
+    num_ctx: int = Field(2048, alias="num_ctx")
     interrupt_method: Literal["system", "user"] = Field(
         "system", alias="interrupt_method"
     )
@@ -114,6 +115,10 @@ class OllamaConfig(OpenAICompatibleConfig):
         "unload_at_exit": Description(
             en="Unload the model when the program exits.",
             zh="是否在程序退出时卸载模型。",
+        ),
+        "num_ctx": Description(
+            en="Context window size in tokens (default 2048). Higher values use more VRAM.",
+            zh="上下文窗口大小（默认 2048）。较大的值使用更多显存。",
         ),
     }
 

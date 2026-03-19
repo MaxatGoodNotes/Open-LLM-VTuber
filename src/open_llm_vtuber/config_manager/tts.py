@@ -456,6 +456,7 @@ class OpenAITTSConfig(I18nMixin):
     api_key: Optional[str] = Field(None, alias="api_key")
     base_url: Optional[str] = Field(None, alias="base_url")
     file_extension: Literal["mp3", "wav"] = Field("mp3", alias="file_extension")
+    speed: float = Field(1.0, alias="speed")
 
     DESCRIPTIONS: ClassVar[Dict[str, Description]] = {
         "model": Description(
@@ -477,6 +478,10 @@ class OpenAITTSConfig(I18nMixin):
         "file_extension": Description(
             en="Audio file format (mp3 or wav, defaults to mp3)",
             zh="音频文件格式（mp3 或 wav，默认为 mp3）",
+        ),
+        "speed": Description(
+            en="Speech speed multiplier (0.25 to 4.0, default 1.0)",
+            zh="语速倍数（0.25 到 4.0，默认 1.0）",
         ),
     }
 

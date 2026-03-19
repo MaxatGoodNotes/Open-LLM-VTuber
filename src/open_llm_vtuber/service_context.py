@@ -24,6 +24,10 @@ from .vad.vad_factory import VADFactory
 from .agent.agent_factory import AgentFactory
 from .translate.translate_factory import TranslateFactory
 
+from .memory.long_term_memory import LongTermMemory
+from .memory.affection import AffectionTracker
+from .memory.context_manager import ContextManager
+
 from .config_manager import (
     Config,
     AgentConfig,
@@ -68,6 +72,10 @@ class ServiceContext:
         self.mcp_prompt: str = ""
 
         self.history_uid: str = ""  # Add history_uid field
+
+        self.long_term_memory: LongTermMemory | None = None
+        self.affection: AffectionTracker | None = None
+        self.context_manager: ContextManager | None = None
 
         self.send_text: Callable = None
         self.client_uid: str = None
@@ -435,15 +443,26 @@ class ServiceContext:
 
     async def construct_system_prompt(self, persona_prompt: str) -> str:
         """
-        Append tool prompts to persona prompt.
+        Build the full system prompt from persona, affection, memories, and tool prompts.
 
         Parameters:
         - persona_prompt (str): The persona prompt.
 
         Returns:
-        - str: The system prompt with all tool prompts appended.
+        - str: The system prompt with all dynamic sections and tool prompts appended.
         """
         logger.debug(f"constructing persona_prompt: '''{persona_prompt}'''")
+
+        if self.affection:
+            persona_prompt += self.affection.get_persona_modifier()
+            toggle_prompt = self.affection.get_toggle_prompt()
+            if toggle_prompt:
+                persona_prompt += toggle_prompt
+
+        if self.long_term_memory:
+            facts_section = self.long_term_memory.get_facts_for_prompt()
+            if facts_section:
+                persona_prompt += facts_section
 
         for prompt_name, prompt_file in self.system_config.tool_prompts.items():
             if (

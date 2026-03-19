@@ -1,6 +1,6 @@
 # config_manager/character.py
 from pydantic import Field, field_validator
-from typing import Dict, ClassVar
+from typing import Dict, ClassVar, Optional
 from .i18n import I18nMixin, Description
 from .asr import ASRConfig
 from .tts import TTSConfig
@@ -26,6 +26,9 @@ class CharacterConfig(I18nMixin):
     vad_config: VADConfig = Field(..., alias="vad_config")
     tts_preprocessor_config: TTSPreprocessorConfig = Field(
         ..., alias="tts_preprocessor_config"
+    )
+    memory_config: Optional[Dict] = Field(
+        default=None, alias="memory_config"
     )
 
     DESCRIPTIONS: ClassVar[Dict[str, Description]] = {

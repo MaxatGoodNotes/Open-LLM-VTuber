@@ -1,0 +1,8 @@
+Extract key facts from this conversation segment. Focus on:
+- Things the user revealed about themselves (name, preferences, projects, opinions)
+- Important decisions or events discussed
+- The user's communication style and what they respond well to
+- Anything the user explicitly asked you to remember
+
+Return a bullet list of concise facts. Omit small talk, greetings, and transient details.
+Only include facts that would be useful to remember in future conversations.

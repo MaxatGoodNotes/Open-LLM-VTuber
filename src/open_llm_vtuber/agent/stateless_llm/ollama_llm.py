@@ -15,9 +15,11 @@ class OllamaLLM(AsyncLLM):
         temperature: float = 1.0,
         keep_alive: float = -1,
         unload_at_exit: bool = True,
+        num_ctx: int = 2048,
     ):
         self.keep_alive = keep_alive
         self.unload_at_exit = unload_at_exit
+        self.num_ctx = num_ctx
         self.cleaned = False
         super().__init__(
             model=model,
@@ -27,6 +29,9 @@ class OllamaLLM(AsyncLLM):
             project_id=project_id,
             temperature=temperature,
         )
+        if num_ctx != 2048:
+            self.extra_body = {"num_ctx": num_ctx}
+            logger.info(f"Ollama context window set to {num_ctx} tokens")
         try:
             # preload model
             logger.info("Preloading model for Ollama")

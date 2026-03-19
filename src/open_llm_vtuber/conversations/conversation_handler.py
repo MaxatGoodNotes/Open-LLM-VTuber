@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 from typing import Dict, Optional, Callable
 
 import numpy as np
@@ -14,6 +15,9 @@ from .single_conversation import process_single_conversation
 from .conversation_utils import EMOJI_LIST
 from .types import GroupConversationState
 from prompts import prompt_loader
+
+_proactive_attempts: Dict[str, int] = {}
+_MAX_PROACTIVE_ATTEMPTS = 3
 
 
 async def handle_conversation_trigger(
@@ -33,12 +37,21 @@ async def handle_conversation_trigger(
     metadata = None
 
     if msg_type == "ai-speak-signal":
+        attempts = _proactive_attempts.get(client_uid, 0)
+        if attempts >= _MAX_PROACTIVE_ATTEMPTS:
+            logger.info(
+                f"Proactive speak skipped for {client_uid}: "
+                f"{attempts} unanswered attempts, waiting for user response"
+            )
+            return
+
         try:
-            # Get proactive speak prompt from config
             prompt_name = "proactive_speak_prompt"
             prompt_file = context.system_config.tool_prompts.get(prompt_name)
             if prompt_file:
-                user_input = prompt_loader.load_util(prompt_file)
+                raw = prompt_loader.load_util(prompt_file)
+                variants = [v.strip() for v in raw.split("---") if v.strip()]
+                user_input = random.choice(variants) if variants else raw
             else:
                 logger.warning("Proactive speak prompt not configured, using default")
                 user_input = "Please say something."
@@ -46,12 +59,12 @@ async def handle_conversation_trigger(
             logger.error(f"Error loading proactive speak prompt: {e}")
             user_input = "Please say something."
 
-        # Add metadata to indicate this is a proactive speak request
-        # that should be skipped in both memory and history
+        _proactive_attempts[client_uid] = attempts + 1
+
         metadata = {
             "proactive_speak": True,
-            "skip_memory": True,  # Skip storing in AI's internal memory
-            "skip_history": True,  # Skip storing in local conversation history
+            "skip_memory": True,
+            "skip_history": True,
         }
 
         await websocket.send_text(
@@ -63,8 +76,10 @@ async def handle_conversation_trigger(
             )
         )
     elif msg_type == "text-input":
+        _proactive_attempts[client_uid] = 0
         user_input = data.get("text", "")
     else:  # mic-audio-end
+        _proactive_attempts[client_uid] = 0
         user_input = received_data_buffers[client_uid]
         received_data_buffers[client_uid] = np.array([])
 

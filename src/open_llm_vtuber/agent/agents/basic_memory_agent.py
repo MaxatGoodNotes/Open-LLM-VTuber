@@ -15,6 +15,7 @@ from ..stateless_llm.stateless_llm_interface import StatelessLLMInterface
 from ..stateless_llm.claude_llm import AsyncLLM as ClaudeAsyncLLM
 from ..stateless_llm.openai_compatible_llm import AsyncLLM as OpenAICompatibleAsyncLLM
 from ...chat_history_manager import get_history
+from ...memory.context_manager import ContextManager
 from ..transformers import (
     sentence_divider,
     actions_extractor,
@@ -84,6 +85,8 @@ class BasicMemoryAgent(AgentInterface):
             logger.debug(
                 "ToolManager not provided, agent will not have pre-formatted tools."
             )
+
+        self._context_manager: Optional[ContextManager] = None
 
         self._set_llm(llm)
         self.set_system(system if system else self._system)
@@ -173,8 +176,20 @@ class BasicMemoryAgent(AgentInterface):
 
         self._memory.append(message_data)
 
+    def set_context_manager(self, context_manager: ContextManager):
+        """Attach a context manager for sliding window + auto-summarization."""
+        self._context_manager = context_manager
+
+    def get_llm(self) -> StatelessLLMInterface:
+        """Expose the LLM for external use (e.g., memory summarization)."""
+        return self._llm
+
+    def get_memory(self) -> List[Dict[str, Any]]:
+        """Return the current in-memory conversation history."""
+        return self._memory
+
     def set_memory_from_history(self, conf_uid: str, history_uid: str) -> None:
-        """Load memory from chat history."""
+        """Load memory from chat history, applying context window limits."""
         messages = get_history(conf_uid, history_uid)
 
         self._memory = []
@@ -190,6 +205,10 @@ class BasicMemoryAgent(AgentInterface):
                 )
             else:
                 logger.warning(f"Skipping invalid message from history: {msg}")
+
+        if self._context_manager:
+            self._memory = self._context_manager.trim_memory(self._memory)
+
         logger.info(f"Loaded {len(self._memory)} messages from history.")
 
     def handle_interrupt(self, heard_response: str) -> None:
@@ -239,8 +258,42 @@ class BasicMemoryAgent(AgentInterface):
 
         return "\n".join(message_parts).strip()
 
+    async def maybe_summarize(self, summary_prompt: str, on_new_facts=None):
+        """Check if memory needs summarization and do it if so.
+
+        Call this before each chat turn. If overflow is detected and
+        auto_summarize is enabled, the oldest messages are summarized
+        into facts and trimmed from memory.
+
+        Args:
+            summary_prompt: The prompt template for fact extraction.
+            on_new_facts: Optional callback(facts: list[str]) to persist extracted facts.
+        """
+        if not self._context_manager or not self._context_manager.auto_summarize:
+            return
+
+        if not self._context_manager.check_needs_summary(self._memory):
+            return
+
+        overflow, kept = self._context_manager.extract_overflow(self._memory)
+        if not overflow:
+            return
+
+        logger.info(f"Auto-summarizing {len(overflow)} messages from memory overflow")
+        facts = await self._context_manager.summarize_messages(
+            overflow, self._llm, summary_prompt
+        )
+
+        if facts and on_new_facts:
+            on_new_facts(facts)
+
+        self._memory = kept
+        logger.info(f"Memory trimmed to {len(self._memory)} messages after summarization")
+
     def _to_messages(self, input_data: BatchInput) -> List[Dict[str, Any]]:
         """Prepare messages for LLM API call."""
+        if self._context_manager:
+            self._memory = self._context_manager.trim_memory(self._memory)
         messages = self._memory.copy()
         user_content = []
         text_prompt = self._to_text_prompt(input_data)
