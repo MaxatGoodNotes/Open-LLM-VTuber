@@ -1,3 +1,4 @@
+import json as _json
 from typing import (
     AsyncIterator,
     List,
@@ -31,6 +32,63 @@ from ...mcpp.types import ToolCallObject
 from ...mcpp.tool_executor import ToolExecutor
 
 
+ESCALATION_TOOL_NAME = "delegate_to_expert"
+
+_ESCALATION_DESCRIPTION = (
+    "LAST RESORT. Call ONLY when the user explicitly requests a task you "
+    "truly cannot do, such as writing a full program, solving graduate-level "
+    "math, or producing a long detailed report. NEVER call for greetings, "
+    "chitchat, short questions, foreign text, or unclear input. You must "
+    "attempt an answer yourself first."
+)
+
+ESCALATION_TOOL_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": ESCALATION_TOOL_NAME,
+        "description": _ESCALATION_DESCRIPTION,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task_summary": {
+                    "type": "string",
+                    "description": "Brief description of what the user needs help with.",
+                }
+            },
+            "required": ["task_summary"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+ESCALATION_TOOL_CLAUDE = {
+    "name": ESCALATION_TOOL_NAME,
+    "description": _ESCALATION_DESCRIPTION,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_summary": {
+                "type": "string",
+                "description": "Brief description of what the user needs help with.",
+            }
+        },
+        "required": ["task_summary"],
+    },
+}
+
+ESCALATION_PROMPT_SNIPPET = (
+    "\nServer: builtin\n"
+    "    Tools:\n"
+    f"        {ESCALATION_TOOL_NAME}:\n"
+    f"            Description: {_ESCALATION_DESCRIPTION}\n"
+    "            Parameters:\n"
+    "                task_summary:\n"
+    "                    Type: string\n"
+    "                    Description: Brief description of what the user needs help with.\n"
+    "            Required: task_summary\n"
+)
+
+
 class BasicMemoryAgent(AgentInterface):
     """Agent with basic chat memory and tool calling support."""
 
@@ -50,6 +108,7 @@ class BasicMemoryAgent(AgentInterface):
         tool_manager: Optional[ToolManager] = None,
         tool_executor: Optional[ToolExecutor] = None,
         mcp_prompt_string: str = "",
+        escalation_llm: Optional[StatelessLLMInterface] = None,
     ):
         """Initialize agent with LLM and configuration."""
         super().__init__()
@@ -63,6 +122,7 @@ class BasicMemoryAgent(AgentInterface):
         self._tool_prompts = tool_prompts or {}
         self._interrupt_handled = False
         self.prompt_mode_flag = False
+        self._escalation_llm = escalation_llm
 
         self._tool_manager = tool_manager
         self._tool_executor = tool_executor
@@ -72,11 +132,11 @@ class BasicMemoryAgent(AgentInterface):
         self._formatted_tools_openai = []
         self._formatted_tools_claude = []
         if self._tool_manager:
-            self._formatted_tools_openai = self._tool_manager.get_formatted_tools(
-                "OpenAI"
+            self._formatted_tools_openai = list(
+                self._tool_manager.get_formatted_tools("OpenAI")
             )
-            self._formatted_tools_claude = self._tool_manager.get_formatted_tools(
-                "Claude"
+            self._formatted_tools_claude = list(
+                self._tool_manager.get_formatted_tools("Claude")
             )
             logger.debug(
                 f"Agent received pre-formatted tools - OpenAI: {len(self._formatted_tools_openai)}, Claude: {len(self._formatted_tools_claude)}"
@@ -84,6 +144,11 @@ class BasicMemoryAgent(AgentInterface):
         else:
             logger.debug(
                 "ToolManager not provided, agent will not have pre-formatted tools."
+            )
+
+        if self._escalation_llm:
+            logger.info(
+                "Escalation LLM available via verbal command 'think hard'"
             )
 
         self._context_manager: Optional[ContextManager] = None
@@ -241,6 +306,97 @@ class BasicMemoryAgent(AgentInterface):
         )
         logger.info(f"Handled interrupt with role '{interrupt_role}'.")
 
+    VERBAL_COMMANDS = {
+        "think hard": "escalate",
+        "search online": "search",
+    }
+
+    def _detect_verbal_command(self, text: str) -> tuple:
+        """Check user text for verbal trigger phrases.
+
+        Returns (command_type, cleaned_text) where command_type is
+        'escalate', 'search', or None.
+        """
+        lower = text.lower()
+        for phrase, cmd in self.VERBAL_COMMANDS.items():
+            if phrase in lower:
+                import re
+                cleaned = re.sub(
+                    re.escape(phrase), "", text, count=1, flags=re.IGNORECASE
+                ).strip()
+                cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.:;!?")
+                logger.info(
+                    f"Verbal command detected: '{phrase}' → {cmd} | "
+                    f"cleaned input: '{cleaned}'"
+                )
+                return cmd, cleaned
+        return None, text
+
+    async def _run_escalation(
+        self,
+        messages: List[Dict[str, Any]],
+        task_summary: str,
+    ) -> AsyncIterator[Union[str, Dict[str, Any]]]:
+        """Hand the conversation to the escalation LLM for a direct response.
+
+        The escalation LLM receives the same persona prompt and full
+        conversation history so it responds in-character.
+        """
+        import datetime
+
+        logger.info(f"Escalating to expert LLM — task: {task_summary}")
+
+        yield {
+            "type": "tool_call_status",
+            "tool_id": f"escalation_{datetime.datetime.now(datetime.timezone.utc).timestamp()}",
+            "tool_name": ESCALATION_TOOL_NAME,
+            "status": "running",
+            "content": f"Task: {task_summary}",
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
+        }
+
+        clean_messages = []
+        for m in messages:
+            if m.get("role") == "assistant" and m.get("content") is None:
+                continue
+            entry = {k: v for k, v in m.items() if k != "tool_calls"}
+            if isinstance(entry.get("content"), list):
+                text_parts = [
+                    c["text"] for c in entry["content"]
+                    if isinstance(c, dict) and c.get("type") == "text"
+                ]
+                entry["content"] = " ".join(text_parts) or None
+                if entry["content"] is None:
+                    continue
+            clean_messages.append(entry)
+
+        escalation_response = ""
+        stream = self._escalation_llm.chat_completion(
+            clean_messages, self._system
+        )
+        async for event in stream:
+            text_chunk = ""
+            if isinstance(event, dict) and event.get("type") == "text_delta":
+                text_chunk = event.get("text", "")
+            elif isinstance(event, str):
+                text_chunk = event
+            if text_chunk:
+                yield text_chunk
+                escalation_response += text_chunk
+
+        if escalation_response:
+            self._add_message(escalation_response, "assistant")
+
+        yield {
+            "type": "tool_call_status",
+            "tool_id": f"escalation_{datetime.datetime.now(datetime.timezone.utc).timestamp()}",
+            "tool_name": ESCALATION_TOOL_NAME,
+            "status": "completed",
+            "content": "Expert response delivered",
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
+        }
+        logger.info("Escalation complete, returning to local LLM.")
+
     def _to_text_prompt(self, input_data: BatchInput) -> str:
         """Format input data to text prompt."""
         message_parts = []
@@ -395,6 +551,19 @@ class BasicMemoryAgent(AgentInterface):
                     return
 
             if pending_tool_calls:
+                escalation_call = next(
+                    (tc for tc in pending_tool_calls
+                     if tc.get("name") == ESCALATION_TOOL_NAME),
+                    None,
+                )
+                if escalation_call and self._escalation_llm:
+                    task = (escalation_call.get("input") or {}).get(
+                        "task_summary", ""
+                    )
+                    async for chunk in self._run_escalation(messages, task):
+                        yield chunk
+                    return
+
                 filtered_assistant_content = [
                     block
                     for block in current_assistant_message_content
@@ -446,7 +615,6 @@ class BasicMemoryAgent(AgentInterface):
                 if tool_results_for_llm:
                     messages.append({"role": "user", "content": tool_results_for_llm})
 
-                # stop_reason = None
                 continue
             else:
                 if current_turn_text:
@@ -550,6 +718,24 @@ class BasicMemoryAgent(AgentInterface):
 
             if detected_prompt_json:
                 logger.info("Processing tools detected via prompt mode JSON.")
+
+                is_escalation = any(
+                    (item.get("tool") or "").lower() == ESCALATION_TOOL_NAME
+                    for item in detected_prompt_json
+                    if isinstance(item, dict)
+                )
+                if is_escalation and self._escalation_llm:
+                    task = ""
+                    for item in detected_prompt_json:
+                        if isinstance(item, dict):
+                            args = item.get("arguments") or {}
+                            if isinstance(args, dict):
+                                task = args.get("task_summary", "")
+                            break
+                    async for chunk in self._run_escalation(messages, task):
+                        yield chunk
+                    return
+
                 self._add_message(current_turn_text, "assistant")
 
                 parsed_tools = self._tool_executor.process_tool_from_prompt_json(
@@ -593,6 +779,21 @@ class BasicMemoryAgent(AgentInterface):
                 continue
 
             elif pending_tool_calls and assistant_message_for_api:
+                escalation_call = next(
+                    (tc for tc in pending_tool_calls
+                     if tc.function.name == ESCALATION_TOOL_NAME),
+                    None,
+                )
+                if escalation_call and self._escalation_llm:
+                    try:
+                        args = _json.loads(escalation_call.function.arguments)
+                    except Exception:
+                        args = {}
+                    task = args.get("task_summary", "")
+                    async for chunk in self._run_escalation(messages, task):
+                        yield chunk
+                    return
+
                 messages.append(assistant_message_for_api)
                 if current_turn_text:
                     self._add_message(current_turn_text, "assistant")
@@ -651,66 +852,55 @@ class BasicMemoryAgent(AgentInterface):
             self.reset_interrupt()
             self.prompt_mode_flag = False
 
-            messages = self._to_messages(input_data)
-            tools = None
-            tool_mode = None
-            llm_supports_native_tools = False
+            user_text = self._to_text_prompt(input_data)
+            verbal_cmd, cleaned_text = self._detect_verbal_command(user_text)
 
-            if self._use_mcpp and self._tool_manager:
-                tools = None
-                if isinstance(self._llm, ClaudeAsyncLLM):
-                    tool_mode = "Claude"
-                    tools = self._formatted_tools_claude
-                    llm_supports_native_tools = True
-                elif isinstance(self._llm, OpenAICompatibleAsyncLLM):
-                    tool_mode = "OpenAI"
-                    tools = self._formatted_tools_openai
-                    llm_supports_native_tools = True
+            if verbal_cmd == "escalate" and self._escalation_llm:
+                if input_data.texts:
+                    input_data.texts[0].content = cleaned_text or user_text
+                messages = self._to_messages(input_data)
+                async for chunk in self._run_escalation(
+                    messages, cleaned_text or user_text
+                ):
+                    yield chunk
+                return
+
+            if verbal_cmd == "search" and self._tool_executor:
+                query = cleaned_text or user_text
+                logger.info(f"Verbal command 'search online' — running search for: {query}")
+                yield {"type": "tool_status", "tool": "search", "status": "searching"}
+                is_error, text_content, _, _ = await self._tool_executor.run_single_tool(
+                    "search", "verbal_search", {"query": query}
+                )
+                if is_error:
+                    logger.warning(f"Search tool error: {text_content}")
+                    search_context = "The web search failed. Answer based on what you know."
                 else:
-                    logger.warning(
-                        f"LLM type {type(self._llm)} not explicitly handled for tool mode determination."
+                    search_context = text_content[:3000] if len(text_content) > 3000 else text_content
+
+                if input_data.texts:
+                    input_data.texts[0].content = (
+                        f"{query}\n\n[Web search results]\n{search_context}"
                     )
 
-                if llm_supports_native_tools and not tools:
-                    logger.warning(
-                        f"No tools available/formatted for '{tool_mode}' mode, despite MCP being enabled."
-                    )
+            messages = self._to_messages(input_data)
 
-            if self._use_mcpp and tool_mode == "Claude":
-                logger.debug(
-                    f"Starting Claude tool interaction loop with {len(tools)} tools."
-                )
-                async for output in self._claude_tool_interaction_loop(
-                    messages, tools if tools else []
-                ):
-                    yield output
-                return
-            elif self._use_mcpp and tool_mode == "OpenAI":
-                logger.debug(
-                    f"Starting OpenAI tool interaction loop with {len(tools)} tools."
-                )
-                async for output in self._openai_tool_interaction_loop(
-                    messages, tools if tools else []
-                ):
-                    yield output
-                return
-            else:
-                logger.info("Starting simple chat completion.")
-                token_stream = self._llm.chat_completion(messages, self._system)
-                complete_response = ""
-                async for event in token_stream:
-                    text_chunk = ""
-                    if isinstance(event, dict) and event.get("type") == "text_delta":
-                        text_chunk = event.get("text", "")
-                    elif isinstance(event, str):
-                        text_chunk = event
-                    else:
-                        continue
-                    if text_chunk:
-                        yield text_chunk
-                        complete_response += text_chunk
-                if complete_response:
-                    self._add_message(complete_response, "assistant")
+            logger.info("Starting simple chat completion.")
+            token_stream = self._llm.chat_completion(messages, self._system)
+            complete_response = ""
+            async for event in token_stream:
+                text_chunk = ""
+                if isinstance(event, dict) and event.get("type") == "text_delta":
+                    text_chunk = event.get("text", "")
+                elif isinstance(event, str):
+                    text_chunk = event
+                else:
+                    continue
+                if text_chunk:
+                    yield text_chunk
+                    complete_response += text_chunk
+            if complete_response:
+                self._add_message(complete_response, "assistant")
 
         return chat_with_memory
 

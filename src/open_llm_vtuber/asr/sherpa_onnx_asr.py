@@ -37,6 +37,7 @@ class VoiceRecognition(ASRInterface):
         debug: bool = False,  # Show debug messages
         sample_rate: int = 16000,  # Sample rate
         feature_dim: int = 80,  # Feature dimension
+        language: str = "auto",  # Language for SenseVoice (auto, en, zh, ja, ko, yue)
         use_itn: bool = True,  # Use ITN for SenseVoice models
         provider: str = "cpu",  # Provider for inference (cpu or cuda)
     ) -> None:
@@ -67,6 +68,7 @@ class VoiceRecognition(ASRInterface):
         self.debug = debug
         self.SAMPLE_RATE = sample_rate
         self.feature_dim = feature_dim
+        self.language = language
         self.use_itn = use_itn
 
         # we need to find a way to get cuda version of sherpa-onnx before we can
@@ -194,6 +196,7 @@ class VoiceRecognition(ASRInterface):
                 tokens=self.tokens,
                 num_threads=self.num_threads,
                 use_itn=self.use_itn,
+                language=self.language if self.language != "auto" else "",
                 debug=self.debug,
                 provider=self.provider,
             )

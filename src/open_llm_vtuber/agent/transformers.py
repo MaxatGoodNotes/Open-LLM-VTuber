@@ -77,8 +77,10 @@ def actions_extractor(live2d_model: Live2dModel):
             async for item in stream:
                 if isinstance(item, SentenceWithTags):
                     sentence = item
+                    sentence.text = live2d_model.strip_invalid_tags(
+                        sentence.text
+                    )
                     actions = Actions()
-                    # Only extract emotions for non-tag text
                     if not any(
                         tag.state in [TagState.START, TagState.END]
                         for tag in sentence.tags
@@ -86,7 +88,7 @@ def actions_extractor(live2d_model: Live2dModel):
                         expressions = live2d_model.extract_emotion(sentence.text)
                         if expressions:
                             actions.expressions = expressions
-                    yield sentence, actions  # Yield the tuple
+                    yield sentence, actions
                 elif isinstance(item, dict):
                     # Pass through dictionaries
                     yield item

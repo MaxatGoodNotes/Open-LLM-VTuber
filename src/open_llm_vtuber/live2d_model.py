@@ -1,4 +1,5 @@
 import json
+import re
 import chardet
 from loguru import logger
 
@@ -170,6 +171,20 @@ class Live2dModel:
                     break
             i += 1
         return expression_list
+
+    def strip_invalid_tags(self, target_str: str) -> str:
+        """Remove bracket expressions that don't match any known emotion tag.
+
+        Valid single-word tags like [joy] are kept. Multi-word or unknown
+        bracket content like [leans back, closes eyes] is stripped out.
+        """
+        def _replace(match: re.Match) -> str:
+            inner = match.group(1).strip().lower()
+            if inner in self.emo_map:
+                return match.group(0)
+            return ""
+
+        return re.sub(r"\[([^\]]+)\]", _replace, target_str)
 
     def remove_emotion_keywords(self, target_str: str) -> str:
         """

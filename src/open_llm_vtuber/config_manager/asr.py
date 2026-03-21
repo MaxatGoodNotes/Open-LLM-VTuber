@@ -208,6 +208,7 @@ class SherpaOnnxASRConfig(I18nMixin):
     fire_red_asr_decoder: Optional[str] = Field(None, alias="fire_red_asr_decoder")
     tokens: str = Field(..., alias="tokens")
     num_threads: int = Field(4, alias="num_threads")
+    language: Optional[str] = Field("auto", alias="language")
     use_itn: bool = Field(True, alias="use_itn")
     provider: Literal["cpu", "cuda", "rocm"] = Field("cpu", alias="provider")
 
@@ -249,6 +250,10 @@ class SherpaOnnxASRConfig(I18nMixin):
             en="Path to FireredASR decoder model", zh="FireredASR 解码器模型路径"
         ),
         "tokens": Description(en="Path to tokens file", zh="词元文件路径"),
+        "language": Description(
+            en="Language code for SenseVoice (auto, en, zh, ja, ko, yue). Default: auto",
+            zh="SenseVoice 语言代码（auto、en、zh、ja、ko、yue），默认：auto",
+        ),
         "num_threads": Description(en="Number of threads to use", zh="使用的线程数"),
         "use_itn": Description(
             en="Enable inverse text normalization", zh="启用反向文本归一化"

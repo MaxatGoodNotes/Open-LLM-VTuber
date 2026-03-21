@@ -593,7 +593,7 @@ class SentenceDivider:
     @property
     def complete_response(self) -> str:
         """Get the complete response accumulated so far"""
-        return "".join(self._full_response)
+        return " ".join(self._full_response)
 
     def _segment_text(self, text: str) -> Tuple[List[str], str]:
         """Segment text using the configured method"""
