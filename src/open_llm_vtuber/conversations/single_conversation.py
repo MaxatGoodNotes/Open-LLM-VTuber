@@ -14,7 +14,17 @@ from .conversation_utils import (
     cleanup_conversation,
     EMOJI_LIST,
 )
-from .toggle_tag_parser import parse_and_send_toggle_tags
+from .toggle_tag_parser import (
+    parse_and_send_toggle_tags,
+    extract_sentence_toggle_tags,
+    normalize_tags,
+    strip_unknown_tags,
+    all_bracket_tags_for_display_strip,
+    BODY_MOTION_COMMANDS,
+    CLOTHING_TOGGLE_COMMANDS,
+    MAX_BODY_MOTIONS_PER_SENTENCE,
+)
+from ..agent.output_types import Actions
 from .types import WebSocketSend
 from .tts_manager import TTSTaskManager
 from ..chat_history_manager import store_message
@@ -89,20 +99,63 @@ async def process_single_conversation(
         try:
             # agent.chat yields Union[SentenceOutput, Dict[str, Any]]
             agent_output_stream = context.agent_engine.chat(batch_input)
+            clothing_toggles_sent: set[str] = set()
 
             async for output_item in agent_output_stream:
                 if (
                     isinstance(output_item, dict)
                     and output_item.get("type") == "tool_call_status"
                 ):
-                    # Handle tool status event: send WebSocket message
                     output_item["name"] = context.character_config.character_name
                     logger.debug(f"Sending tool status update: {output_item}")
 
                     await websocket_send(json.dumps(output_item))
 
                 elif isinstance(output_item, (SentenceOutput, AudioOutput)):
-                    # Handle SentenceOutput or AudioOutput
+                    if isinstance(output_item, SentenceOutput):
+                        output_item.display_text.text = normalize_tags(
+                            output_item.display_text.text
+                        )
+                        _, toggle_cmds = extract_sentence_toggle_tags(
+                            output_item.display_text.text,
+                            context.affection,
+                        )
+                        output_item.display_text.text = strip_unknown_tags(
+                            output_item.display_text.text,
+                            known_tags=all_bracket_tags_for_display_strip(
+                                set(context.live2d_model.emo_map.keys())
+                            ),
+                        )
+                        if toggle_cmds:
+                            kept = []
+                            sentence_motion_count = 0
+                            for cmd in toggle_cmds:
+                                if cmd in BODY_MOTION_COMMANDS:
+                                    if sentence_motion_count < MAX_BODY_MOTIONS_PER_SENTENCE:
+                                        kept.append(cmd)
+                                        sentence_motion_count += 1
+                                    else:
+                                        logger.info(
+                                            f"Body-motion cap reached "
+                                            f"({MAX_BODY_MOTIONS_PER_SENTENCE}), "
+                                            f"dropping {cmd}"
+                                        )
+                                elif cmd in CLOTHING_TOGGLE_COMMANDS:
+                                    if cmd not in clothing_toggles_sent:
+                                        kept.append(cmd)
+                                        clothing_toggles_sent.add(cmd)
+                                    else:
+                                        logger.info(
+                                            f"Duplicate clothing toggle, "
+                                            f"dropping repeat {cmd}"
+                                        )
+                                else:
+                                    kept.append(cmd)
+                            if kept:
+                                if output_item.actions is None:
+                                    output_item.actions = Actions()
+                                output_item.actions.toggles = kept
+
                     response_part = await process_agent_output(
                         output=output_item,
                         character_config=context.character_config,
@@ -141,7 +194,15 @@ async def process_single_conversation(
         # Wait for any pending TTS tasks
         if tts_manager.task_list:
             await asyncio.gather(*tts_manager.task_list)
-            await websocket_send(json.dumps({"type": "backend-synth-complete"}))
+            try:
+                await websocket_send(
+                    json.dumps({"type": "backend-synth-complete"})
+                )
+            except Exception:
+                logger.warning(
+                    "WebSocket error sending backend-synth-complete, "
+                    "continuing conversation cleanup"
+                )
 
         await finalize_conversation_turn(
             tts_manager=tts_manager,
@@ -172,9 +233,14 @@ async def process_single_conversation(
         raise
     except Exception as e:
         logger.error(f"Error in conversation chain: {e}")
-        await websocket_send(
-            json.dumps({"type": "error", "message": f"Conversation error: {str(e)}"})
-        )
+        try:
+            await websocket_send(
+                json.dumps(
+                    {"type": "error", "message": f"Conversation error: {str(e)}"}
+                )
+            )
+        except Exception:
+            logger.warning("WebSocket broken, could not send error to client")
         raise
     finally:
         cleanup_conversation(tts_manager, session_emoji)
