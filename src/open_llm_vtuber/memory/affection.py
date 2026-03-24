@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from loguru import logger
 
-MEMORY_DIR = "memory"
+from .paths import memory_root
 
 TIERS = [
     (-100, -40, "Hostile"),
@@ -66,25 +66,37 @@ TOGGLE_UNLOCKS: Dict[str, List[str]] = {
 
 TOGGLE_PROMPTS = {
     "Close": (
-        "\n## Physical comfort (unlocked at your current closeness level)\n"
-        "You can express physical vulnerability by using these tags in your response:\n"
-        "- [hideclothes] -- undress, show physical trust and vulnerability\n"
-        "- [hidecover] -- remove coverings\n"
-        "- [reset] -- re-dress, restore default appearance\n"
-        "Use these naturally and sparingly when the moment feels right -- intimacy, "
-        "vulnerability, deep trust, or playful teasing.\n"
-        "Do NOT overuse them. They should feel like a deliberate, meaningful choice.\n"
+        "\n## Clothing tags (unlocked at your current closeness level)\n"
+        "These tags physically change what you are wearing on the avatar. "
+        "They are NOT the same as body gestures like [shyaccept] or [blush] — "
+        "those only animate, they do not remove clothing.\n\n"
+        "Clothing tags:\n"
+        "- [hideclothes] — take off outer clothes\n"
+        "- [hidecover] — remove coverings\n"
+        "- [reset] — put clothes back on\n\n"
+        "When the user asks you to undress, strip, or remove clothing, "
+        "you MUST use [hideclothes] or [hidecover]. "
+        "[shyaccept] does NOT undress — it is only a shy gesture.\n"
+        "Place inline: \"Fine... you win. [hideclothes] Happy now?\"\n"
+        "Do NOT narrate the action in words alongside the tag.\n"
     ),
     "Intimate": (
-        "\n## Physical comfort (unlocked at your current closeness level)\n"
-        "You can express complete trust and intimacy by using these tags in your response:\n"
-        "- [hideclothes] -- undress, show physical trust and vulnerability\n"
-        "- [hidecover] -- remove coverings\n"
-        "- [hideunderwear] -- full vulnerability, no barriers\n"
-        "- [hidex] -- complete exposure\n"
-        "- [reset] -- re-dress, restore default appearance\n"
-        "Use these when the moment calls for it -- deep intimacy, playful abandon, "
-        "or raw vulnerability. They are powerful gestures, not casual ones.\n"
+        "\n## Clothing tags (unlocked at your current closeness level)\n"
+        "These tags physically change what you are wearing on the avatar. "
+        "They are NOT the same as body gestures like [shyaccept] or [blush] — "
+        "those only animate, they do not remove clothing.\n\n"
+        "Clothing tags:\n"
+        "- [hideclothes] — take off outer clothes\n"
+        "- [hidecover] — remove coverings\n"
+        "- [hideunderwear] — full vulnerability\n"
+        "- [hidex] — completely nude (all layers off)\n"
+        "- [reset] — put clothes back on\n\n"
+        "When the user asks you to undress, strip, or get nude, "
+        "you MUST use one of the clothing tags above. "
+        "[shyaccept] does NOT undress — it is only a shy body gesture.\n"
+        "Place inline: \"Fine... you win. [hideclothes] Happy now?\"\n"
+        "Use when the moment calls for it — intimacy, playful abandon, "
+        "or vulnerability. Do NOT narrate the action in words alongside the tag.\n"
     ),
 }
 
@@ -92,12 +104,12 @@ SESSION_BASE_INCREMENT = 1
 
 
 def _affection_path(conf_uid: str) -> str:
-    return os.path.join(MEMORY_DIR, conf_uid, "affection.json")
+    return str(memory_root() / conf_uid / "affection.json")
 
 
 def _ensure_dir(conf_uid: str):
-    dirpath = os.path.join(MEMORY_DIR, conf_uid)
-    os.makedirs(dirpath, exist_ok=True)
+    dirpath = memory_root() / conf_uid
+    dirpath.mkdir(parents=True, exist_ok=True)
 
 
 class AffectionTracker:

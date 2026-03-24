@@ -67,6 +67,7 @@ TAG_TO_COMMAND = {
     "strip": "/hideclothes",
     "strips": "/hideclothes",
     "disrobe": "/hideclothes",
+    "robe": "/hideclothes",
     "nude": "/hidex",
     "naked": "/hidex",
     "fullnude": "/hidex",
@@ -116,6 +117,10 @@ BODY_MOTION_COMMANDS: frozenset[str] = frozenset({
 
 CLOTHING_TOGGLE_COMMANDS: frozenset[str] = frozenset({
     "/hideclothes", "/hidecover", "/hideunderwear", "/hidex", "/reset",
+})
+
+SHY_REACT_TRIGGERS: frozenset[str] = frozenset({
+    "/hideclothes", "/hideunderwear", "/hidex",
 })
 
 MAX_BODY_MOTIONS_PER_SENTENCE = 3

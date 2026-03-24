@@ -22,6 +22,7 @@ from .toggle_tag_parser import (
     all_bracket_tags_for_display_strip,
     BODY_MOTION_COMMANDS,
     CLOTHING_TOGGLE_COMMANDS,
+    SHY_REACT_TRIGGERS,
     MAX_BODY_MOTIONS_PER_SENTENCE,
 )
 from ..agent.output_types import Actions
@@ -151,6 +152,12 @@ async def process_single_conversation(
                                         )
                                 else:
                                     kept.append(cmd)
+                            if any(c in SHY_REACT_TRIGGERS for c in kept):
+                                if "/shyaccept" not in kept:
+                                    kept.append("/shyaccept")
+                                    logger.info(
+                                        "Auto-injected /shyaccept alongside clothing toggle"
+                                    )
                             if kept:
                                 if output_item.actions is None:
                                     output_item.actions = Actions()
